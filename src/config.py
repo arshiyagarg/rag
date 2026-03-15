@@ -13,14 +13,14 @@ GROQ_CHAT_MODEL: str = os.getenv("GROQ_CHAT_MODEL", "llama-3.3-70b-versatile")
 
 # ── Pinecone ───────────────────────────────────────────────────
 PINECONE_API_KEY: str = os.environ["PINECONE_API_KEY"]
-PINECONE_INDEX_NAME: str = os.getenv("PINECONE_INDEX_NAME", "code-explainer")
+PINECONE_INDEX_NAME: str = os.getenv("PINECONE_INDEX_NAME", "dsa-hint-engine")
 PINECONE_CLOUD: str = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION: str = os.getenv("PINECONE_REGION", "us-east-1")
 PINECONE_DIMENSION: int = 3072  # gemini-embedding-2-preview output dim
 
 # ── Retrieval ──────────────────────────────────────────────────
-RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", "10"))
-RETRIEVAL_SCORE_THRESHOLD: float = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.60"))
+RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", "20"))
+RETRIEVAL_SCORE_THRESHOLD: float = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.40"))
 
 # ── Chunking ───────────────────────────────────────────────────
 CHUNK_TOKEN_LIMIT: int = int(os.getenv("CHUNK_TOKEN_LIMIT", "512"))
@@ -35,5 +35,18 @@ JINA_API_KEY: str = os.getenv("JINA_API_KEY", "")
 JINA_RERANKER_MODEL: str = os.getenv("JINA_RERANKER_MODEL", "jinaai/jina-reranker-v2-base-multilingual")
 JINA_RERANKER_TOP_N: int = int(os.getenv("RERANKER_TOP_N", "5"))
 
+# ── DSA topics (v2 groundwork — per-topic Pinecone namespaces) ─
+DSA_TOPICS: list[str] = [
+    "data_structures",
+    "dynamic_programming",
+    "graph",
+    "string",
+    "algebra",
+    "combinatorics",
+]
+
 # ── Stack Exchange API ─────────────────────────────────────────
 STACKAPPS_KEY: str = os.getenv("STACKAPPS_KEY", "")
+
+# ── GitHub API ─────────────────────────────────────────────────
+GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
