@@ -34,3 +34,6 @@ JINA_URL: str = os.getenv("JINA_URL", "https://api.jina.ai/v1/rerank")
 JINA_API_KEY: str = os.getenv("JINA_API_KEY", "")
 JINA_RERANKER_MODEL: str = os.getenv("JINA_RERANKER_MODEL", "jinaai/jina-reranker-v2-base-multilingual")
 JINA_RERANKER_TOP_N: int = int(os.getenv("RERANKER_TOP_N", "5"))
+
+# ── Stack Exchange API ─────────────────────────────────────────
+STACKAPPS_KEY: str = os.getenv("STACKAPPS_KEY", "")
