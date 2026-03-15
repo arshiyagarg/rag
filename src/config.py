@@ -28,3 +28,9 @@ CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "64"))
 
 # ── Generation ─────────────────────────────────────────────────
 MAX_CONTEXT_TOKENS: int = int(os.getenv("MAX_CONTEXT_TOKENS", "6000"))
+
+# ── Jina Reranker ──────────────────────────────────────────────
+JINA_URL: str = os.getenv("JINA_URL", "https://api.jina.ai/v1/rerank")
+JINA_API_KEY: str = os.getenv("JINA_API_KEY", "")
+JINA_RERANKER_MODEL: str = os.getenv("JINA_RERANKER_MODEL", "jinaai/jina-reranker-v2-base-multilingual")
+JINA_RERANKER_TOP_N: int = int(os.getenv("RERANKER_TOP_N", "5"))
