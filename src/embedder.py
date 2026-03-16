@@ -248,12 +248,63 @@ def upsert_to_pinecone(index, paired: list[tuple[dict, list[float]]]) -> int:
 
 # ── Main pipeline ──────────────────────────────────────────────
 
-def embed_and_store(chunks: list[dict] | None = None) -> int:
-    """Load chunks → embed → upsert to Pinecone."""
+def _filter_existing(chunks: list[dict], index) -> list[dict]:
+    """
+    Remove chunks already in Pinecone by checking chunk_id via fetch().
+    Pinecone fetch does NOT count against Gemini embed quota.
+    This prevents re-embedding on repeated ingest runs.
+    """
+    ids      = [c["chunk_id"] for c in chunks]
+    existing: set[str] = set()
+
+    for i in range(0, len(ids), 100):
+        batch_ids = ids[i : i + 100]
+        try:
+            resp = index.fetch(ids=batch_ids)
+            existing.update(resp.get("vectors", {}).keys())
+        except Exception:
+            pass  # on error, conservatively re-embed this batch
+
+    new_chunks = [c for c in chunks if c["chunk_id"] not in existing]
+
+    if existing:
+        console.print(
+            f"[dim]Skipping {len(existing)} already-indexed chunks — "
+            f"embedding {len(new_chunks)} new ones.[/dim]"
+        )
+    return new_chunks
+
+
+def embed_and_store(
+    chunks:        list[dict] | None = None,
+    skip_existing: bool              = True,
+) -> int:
+    """
+    Load chunks → skip already-indexed → embed new → upsert to Pinecone.
+
+    Args:
+        chunks:        pre-loaded chunk list. If None, loads from disk.
+        skip_existing: skip chunks already in Pinecone (default True).
+                       Prevents burning Gemini quota on re-runs.
+                       Pass False only for a full re-index.
+    """
     if chunks is None:
         chunks = load_chunks()
     if not chunks:
         console.print("[red]No chunks to embed.[/red]")
+        return 0
+
+    # Connect first so we can check existing vectors before embedding
+    pc    = Pinecone(api_key=PINECONE_API_KEY)
+    index = get_or_create_index(pc)
+
+    if skip_existing:
+        chunks = _filter_existing(chunks, index)
+
+    if not chunks:
+        console.print("[green]All chunks already indexed — nothing to embed.[/green]")
+        stats = index.describe_index_stats()
+        console.print(f"[dim]Live count: {stats.total_vector_count} vectors[/dim]\n")
         return 0
 
     console.print(f"\n[bold]Embedding {len(chunks)} chunks[/bold]")
@@ -261,18 +312,16 @@ def embed_and_store(chunks: list[dict] | None = None) -> int:
     console.print(f"[dim]Vector index: {PINECONE_INDEX_NAME} ({PINECONE_DIMENSION}d)[/dim]")
     console.print(f"[dim]Rate limit  : {RPM_LIMIT} RPM (Gemini free tier)[/dim]\n")
 
-    paired = embed_all_chunks(chunks)
+    paired = embed_all_chunks(chunks[0:500]) # curently limilted to 500 chunks only because of free tied limitation (TO CHANGE)
     if not paired:
         console.print("[red]No embeddings produced. Aborting.[/red]")
         return 0
 
-    pc    = Pinecone(api_key=PINECONE_API_KEY)
-    index = get_or_create_index(pc)
     total = upsert_to_pinecone(index, paired)
 
     stats      = index.describe_index_stats()
     live_count = stats.total_vector_count
-    console.print(f"\n[green]Upserted  [/green] {total} vectors")
+    console.print(f"\n[green]Upserted  [/green] {total} new vectors")
     console.print(f"[green]Live count[/green] {live_count} total in Pinecone\n")
 
     return total

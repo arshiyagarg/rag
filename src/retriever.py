@@ -46,7 +46,7 @@ from src.config import (
     PINECONE_INDEX_NAME,
     RETRIEVAL_TOP_K,
     RETRIEVAL_SCORE_THRESHOLD,
-    RERANKER_TOP_N,
+    JINA_RERANKER_TOP_N,
 )
 
 console = Console()
@@ -157,7 +157,7 @@ def retrieve(
     score_threshold: float      = RETRIEVAL_SCORE_THRESHOLD,
     source_filter:   str | None = None,
     rerank:          bool       = True,
-    top_n:           int        = RERANKER_TOP_N,
+    top_n:           int        = JINA_RERANKER_TOP_N,
 ) -> list[dict]:
     """
     Retrieve and rerank the most relevant chunks for a DSA query.
@@ -277,8 +277,8 @@ if __name__ == "__main__":
     ap.add_argument(
         "--top-n",
         type=int,
-        default=RERANKER_TOP_N,
-        help=f"Chunks to keep after reranking (default: {RERANKER_TOP_N})",
+        default=JINA_RERANKER_TOP_N,
+        help=f"Chunks to keep after reranking (default: {JINA_RERANKER_TOP_N})",
     )
     ap.add_argument(
         "--threshold",
