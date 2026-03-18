@@ -5,12 +5,17 @@ Sources:
     stackoverflow   — top-voted DSA Q&A via Stack Exchange API
     cp_algorithms   — DSA articles from CP-Algorithms via GitHub
 
+Fallback behaviour:
+    If all crawled chunks already exist in Pinecone, ingest.py
+    automatically fetches MORE data from the same source (deeper
+    crawl) and tries again — up to MAX_FALLBACK_ROUNDS times.
+
 Usage:
     python ingest.py                           # ingest all sources
     python ingest.py --source stackoverflow    # single source
     python ingest.py --source cp_algorithms    # single source
     python ingest.py --dry-run                 # crawl + chunk only, no embed
-    python ingest.py --from-step chunk         # skip crawl, start from chunk
+    python ingest.py --from-step chunk         # skip crawl
     python ingest.py --from-step embed         # skip crawl + chunk
     python ingest.py --force                   # re-crawl even if files exist
     python ingest.py --delete-index            # wipe Pinecone index first
@@ -29,12 +34,24 @@ from src.so_crawler import crawl_so
 from src.cp_crawler import crawl_cp
 from src.chunker    import chunk_all, load_chunks
 from src.embedder   import embed_and_store
-from src.config     import PINECONE_API_KEY, PINECONE_INDEX_NAME
+from src.config     import (
+    PINECONE_API_KEY,
+    PINECONE_INDEX_NAME,
+)
 
 console = Console()
 
-STEPS   = ["crawl", "chunk", "embed"]
-SOURCES = ["stackoverflow", "cp_algorithms"]
+STEPS              = ["crawl", "chunk", "embed"]
+SOURCES            = ["stackoverflow", "cp_algorithms"]
+MAX_FALLBACK_ROUNDS = 3   # max deeper-crawl attempts before giving up
+
+# How many extra items to fetch per fallback round
+SO_FALLBACK_EXTRA  = 50   # +50 questions per round
+CP_FALLBACK_TOPICS = [     # additional CP topics to fetch on fallback
+    ["data_structures", "dynamic_programming"],
+    ["graph", "string"],
+    ["algebra", "combinatorics"],
+]
 
 
 def print_summary(
@@ -52,6 +69,99 @@ def print_summary(
     total = sum(timings.values())
     console.print(f"  [bold]Total time     :[/bold] {total:.1f}s ({total/60:.1f} min)")
     console.print()
+
+
+def _deeper_crawl_so(round_num: int, force: bool) -> list[dict]:
+    """
+    Fetch more SO questions by increasing max_questions.
+    Each fallback round fetches 50 more than the default 100.
+    """
+    extra       = SO_FALLBACK_EXTRA * round_num
+    max_q       = 100 + extra
+    console.print(
+        f"[yellow]Fallback round {round_num}:[/yellow] "
+        f"fetching up to {max_q} SO questions (+{extra} more)..."
+    )
+    try:
+        crawl_so(max_questions=max_q, skip_existing=not force)
+        chunks = chunk_all(sources=["stackoverflow"], save_to_disk=True)
+        return chunks
+    except Exception as e:
+        console.print(f"[red]Fallback crawl failed:[/red] {e}")
+        return []
+
+
+def _deeper_crawl_cp(round_num: int, force: bool) -> list[dict]:
+    """
+    Fetch additional CP-Algorithms topic folders on each fallback round.
+    Round 1 → data_structures + DP, round 2 → graph + string, etc.
+    """
+    idx    = (round_num - 1) % len(CP_FALLBACK_TOPICS)
+    topics = CP_FALLBACK_TOPICS[idx]
+    console.print(
+        f"[yellow]Fallback round {round_num}:[/yellow] "
+        f"fetching additional CP topics: {topics}..."
+    )
+    try:
+        crawl_cp(topics=topics, skip_existing=not force)
+        chunks = chunk_all(sources=["cp_algorithms"], save_to_disk=True)
+        return chunks
+    except Exception as e:
+        console.print(f"[red]Fallback crawl failed:[/red] {e}")
+        return []
+
+
+def run_embed_with_fallback(
+    chunks:   list[dict],
+    sources:  list[str],
+    force:    bool,
+) -> int:
+    """
+    Try to embed chunks. If all already exist in Pinecone, trigger a
+    deeper crawl and retry — up to MAX_FALLBACK_ROUNDS times.
+
+    Returns total vectors upserted across all rounds.
+    """
+    total_upserted = 0
+
+    for round_num in range(MAX_FALLBACK_ROUNDS + 1):
+        upserted, all_existed = embed_and_store(chunks)
+        total_upserted += upserted
+
+        if not all_existed:
+            # New chunks were found and embedded — done
+            break
+
+        if round_num == MAX_FALLBACK_ROUNDS:
+            console.print(
+                f"[yellow]All {MAX_FALLBACK_ROUNDS} fallback rounds exhausted.[/yellow]\n"
+                "[dim]Your Pinecone index already contains all available data "
+                "from this source. To add more variety, try:\n"
+                "  • Increase MIN_SCORE in so_crawler.py to fetch lower-voted questions\n"
+                "  • Add more CP-Algorithms topic folders to DSA_TOPICS in config.py\n"
+                "  • Run with --force to re-embed existing chunks (resets index)[/dim]\n"
+            )
+            break
+
+        # All chunks existed — fetch more data and retry
+        console.print(
+            f"\n[yellow]All chunks already in Pinecone.[/yellow] "
+            f"Attempting fallback crawl (round {round_num + 1}/{MAX_FALLBACK_ROUNDS})...\n"
+        )
+
+        new_chunks: list[dict] = []
+        if "stackoverflow" in sources:
+            new_chunks.extend(_deeper_crawl_so(round_num + 1, force))
+        if "cp_algorithms" in sources:
+            new_chunks.extend(_deeper_crawl_cp(round_num + 1, force))
+
+        if not new_chunks:
+            console.print("[dim]Fallback crawl returned no new data.[/dim]\n")
+            break
+
+        chunks = new_chunks
+
+    return total_upserted
 
 
 def main() -> None:
@@ -141,7 +251,6 @@ def main() -> None:
             console.print(f"[red]Chunking failed:[/red] {e}")
             sys.exit(1)
     else:
-        # Load from disk if skipping chunk step
         console.print("[dim]Skipping chunk — loading from disk.[/dim]\n")
         chunks = load_chunks()
 
@@ -163,7 +272,7 @@ def main() -> None:
         console.print()
         sys.exit(0)
 
-    # ── Step 3: Embed + upsert ─────────────────────────────────
+    # ── Step 3: Embed + upsert (with fallback) ─────────────────
     if start_idx <= STEPS.index("embed"):
         console.print(Rule("[bold]Step 3/3 — Embed + Upsert[/bold]"))
 
@@ -181,7 +290,7 @@ def main() -> None:
 
         t0 = time.monotonic()
         try:
-            total_vectors = embed_and_store(chunks)
+            total_vectors = run_embed_with_fallback(chunks, sources, args.force)
             timings["embed"] = time.monotonic() - t0
             console.print(f"[green]✓[/green] {total_vectors} vectors upserted\n")
         except Exception as e:

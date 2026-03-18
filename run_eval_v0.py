@@ -89,7 +89,7 @@ def run_question(
     """Run the pipeline on one golden question and return scored output."""
     qid      = golden["id"]
     category = golden["category"]
-    question = golden["question"]
+    question = golden["problem"]
     code     = golden.get("code_snippet")
 
     console.rule(f"[bold]{qid}[/bold] — {category}")

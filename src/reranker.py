@@ -20,38 +20,67 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 from rich.console import Console
 
-from src.config import JINA_API_KEY, JINA_RERANKER_MODEL, JINA_RERANKER_TOP_N, JINA_URL
+from src.config import JINA_API_KEY, JINA_RERANKER_TOP_N, JINA_RERANKER_MODEL
 
 console = Console()
 
-# ── API call ───────────────────────────────────────────────────
+JINA_URL = "https://api.jina.ai/v1/rerank"
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    reraise=True,
-)
+
 def _call_jina(query: str, documents: list[str], top_n: int) -> list[dict]:
     """
     Call Jina reranker API.
     Returns raw results list: [{index, relevance_score, document}, ...]
+    Raises on 4xx client errors immediately (no retry).
+    Retries on 429 / 5xx only.
     """
-    resp = requests.post(
-        JINA_URL,
-        headers={
-            "Authorization": f"Bearer {JINA_API_KEY}",
-            "Content-Type":  "application/json",
-        },
-        json={
-            "model":     JINA_RERANKER_MODEL,
-            "query":     query,
-            "documents": documents,
-            "top_n":     top_n,
-        },
-        timeout=20,
-    )
-    resp.raise_for_status()
-    return resp.json().get("results", [])
+    MAX_RETRIES = 2
+
+    for attempt in range(MAX_RETRIES + 1):
+        resp = requests.post(
+            JINA_URL,
+            headers={
+                "Authorization": f"Bearer {JINA_API_KEY}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "model":     JINA_RERANKER_MODEL,
+                "query":     query,
+                "documents": documents,
+                "top_n":     top_n,
+            },
+            timeout=20,
+        )
+
+        if resp.status_code == 200:
+            return resp.json().get("results", [])
+
+        # Log the error body for debugging
+        try:
+            body = resp.json()
+        except Exception:
+            body = resp.text[:300]
+
+        # 4xx (except 429) = client error, never retry
+        if 400 <= resp.status_code < 500 and resp.status_code != 429:
+            console.print(
+                f"[red]Jina {resp.status_code}:[/red] {body}\n"
+                f"[dim]query_len={len(query)} docs={len(documents)} top_n={top_n}[/dim]"
+            )
+            raise requests.exceptions.HTTPError(
+                f"{resp.status_code} Client Error: {body}", response=resp
+            )
+
+        # 429 / 5xx — retry with backoff
+        if attempt < MAX_RETRIES:
+            import time
+            wait = 2 ** (attempt + 1)
+            console.print(f"[dim]Jina {resp.status_code}, retrying in {wait}s...[/dim]")
+            time.sleep(wait)
+        else:
+            resp.raise_for_status()
+
+    return []
 
 
 # ── Main rerank ────────────────────────────────────────────────
@@ -77,20 +106,34 @@ def rerank(
     if not chunks:
         return []
 
-    # Nothing to rerank if we already have fewer chunks than top_n
+    # Nothing to rerank if already fewer chunks than top_n
     if len(chunks) <= top_n:
         return chunks
 
-    documents = [c["text"] for c in chunks]
+    # Filter out empty or whitespace-only text — Jina 422s on these
+    valid_chunks = [c for c in chunks if c.get("text", "").strip()]
+    if not valid_chunks:
+        return chunks[:top_n]
+
+    if len(valid_chunks) < len(chunks):
+        console.print(
+            f"[dim]Reranker: dropped {len(chunks) - len(valid_chunks)} "
+            f"empty chunks before reranking.[/dim]"
+        )
+
+    # Truncate query to 500 chars and each document to 2000 chars
+    # Jina 422s on empty docs, very long queries, or very long documents
+    safe_query = query.strip()[:500]
+    documents  = [c["text"].strip()[:2000] for c in valid_chunks]
 
     try:
-        results = _call_jina(query, documents, top_n)
+        results = _call_jina(safe_query, documents, min(top_n, len(documents)))
     except Exception as e:
         console.print(
             f"[yellow]Reranker unavailable:[/yellow] {e} — "
             "falling back to original retrieval order."
         )
-        return chunks[:top_n]
+        return valid_chunks[:top_n]
 
     # Map reranked results back to original chunk dicts
     reranked: list[dict] = []
@@ -114,7 +157,7 @@ if __name__ == "__main__":
     ap.add_argument(
         "query",
         nargs="?",
-        default="how does asyncio.gather handle exceptions",
+        default="how to find longest substring without repeating characters",
         help="Query to retrieve and rerank",
     )
     ap.add_argument("--top-k",  type=int, default=10, help="Chunks to retrieve before reranking")

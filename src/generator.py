@@ -1,37 +1,38 @@
 """
 generator.py — call Groq LLM and parse the response
 
-Takes a messages list from prompt_builder.py, calls the Groq API
-with llama-3.3-70b-versatile, streams the response, extracts cited
-source URLs, and returns a structured result dict.
+Three public functions:
+    generate(messages, stream)         → dict        CLI + eval
+    stream_generator(messages)         → Generator   Streamlit st.write_stream()
+    extract_sources(text)              → list[str]   parse [SOURCE: url] citations
 
-Single public function:
-    generate(messages) -> dict
-
-Returned dict:
+generate() returns:
 {
-    "explanation":  "...",           # full LLM response text
-    "sources":      ["url1", ...],   # unique URLs cited in the response
+    "explanation":  "...",
+    "sources":      ["url1", ...],
     "input_tokens":  412,
     "output_tokens": 284,
     "model":        "llama-3.3-70b-versatile"
 }
 
-Run directly to test generation with a dummy prompt:
+stream_generator() yields raw token strings — compatible with st.write_stream().
+After the generator is exhausted, call get_stream_result() to get the full
+result dict with sources and token counts.
+
+Run directly to test:
     python -m src.generator
 """
 
 import re
-from groq import Groq
+from typing import Generator
+from groq import Groq, RateLimitError, APIStatusError
 from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
 )
-from groq import RateLimitError, APIStatusError
 from rich.console import Console
-from rich.markdown import Markdown
 
 from src.config import GROQ_API_KEY, GROQ_CHAT_MODEL, MAX_CONTEXT_TOKENS
 
@@ -40,12 +41,7 @@ console = Console()
 # ── Client ─────────────────────────────────────────────────────
 _client = Groq(api_key=GROQ_API_KEY)
 
-# Max tokens to generate in the response
-# Groq free tier context window for llama-3.3-70b is 128k
-# We reserve 1024 for the explanation — enough for a detailed answer
-MAX_OUTPUT_TOKENS = 1024
-
-# Pattern to extract [SOURCE: url] citations from LLM output
+MAX_OUTPUT_TOKENS  = 1024
 SOURCE_CITATION_RE = re.compile(r"\[SOURCE:\s*(https?://[^\]]+)\]")
 
 
@@ -53,9 +49,9 @@ SOURCE_CITATION_RE = re.compile(r"\[SOURCE:\s*(https?://[^\]]+)\]")
 
 def extract_sources(text: str) -> list[str]:
     """
-    Extract unique cited URLs from the LLM response.
-    Matches [SOURCE: https://...] patterns inserted per the system prompt.
-    Preserves order of first appearance.
+    Extract unique cited URLs from LLM output.
+    Matches [SOURCE: https://...] per the system prompt instruction.
+    Preserves first-appearance order.
     """
     seen:    set[str]  = set()
     sources: list[str] = []
@@ -67,7 +63,7 @@ def extract_sources(text: str) -> list[str]:
     return sources
 
 
-# ── LLM call ───────────────────────────────────────────────────
+# ── Core Groq call ─────────────────────────────────────────────
 
 @retry(
     stop=stop_after_attempt(3),
@@ -75,80 +71,58 @@ def extract_sources(text: str) -> list[str]:
     retry=retry_if_exception_type((RateLimitError, APIStatusError)),
     reraise=True,
 )
-def _call_groq(messages: list[dict], stream: bool = True) -> tuple[str, int, int]:
+def _call_groq_blocking(messages: list[dict]) -> tuple[str, int, int]:
     """
-    Call the Groq chat completion API.
-
-    Args:
-        messages: list of {role, content} dicts from prompt_builder
-        stream:   if True, streams tokens to console while collecting
-
-    Returns:
-        (full_response_text, input_tokens, output_tokens)
+    Non-streaming Groq call — used by generate() for CLI and eval.
+    Returns (full_text, input_tokens, output_tokens).
     """
-    if stream:
-        response_text = ""
-        input_tokens  = 0
-        output_tokens = 0
-
-        with _client.chat.completions.create(
-            model=GROQ_CHAT_MODEL,
-            messages=messages,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            temperature=0.2,        # low temp = more factual, less creative
-            stream=True,
-        ) as stream_resp:
-            for chunk in stream_resp:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    response_text += delta.content
-                    # Print token-by-token to console
-                    console.print(delta.content, end="", highlight=False)
-
-                # Capture usage from the final chunk
-                if chunk.usage:
-                    input_tokens  = chunk.usage.prompt_tokens
-                    output_tokens = chunk.usage.completion_tokens
-
-        console.print()  # newline after streamed output
-        return response_text, input_tokens, output_tokens
-
-    else:
-        # Non-streaming path (used in eval mode)
-        resp = _client.chat.completions.create(
-            model=GROQ_CHAT_MODEL,
-            messages=messages,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            temperature=0.2,
-        )
-        text          = resp.choices[0].message.content
-        input_tokens  = resp.usage.prompt_tokens
-        output_tokens = resp.usage.completion_tokens
-        return text, input_tokens, output_tokens
+    resp = _client.chat.completions.create(
+        model=GROQ_CHAT_MODEL,
+        messages=messages,
+        max_tokens=MAX_OUTPUT_TOKENS,
+        temperature=0.2,
+        stream=False,
+    )
+    return (
+        resp.choices[0].message.content,
+        resp.usage.prompt_tokens,
+        resp.usage.completion_tokens,
+    )
 
 
-# ── Main generate ──────────────────────────────────────────────
+def _call_groq_streaming(messages: list[dict]):
+    """
+    Return a raw Groq streaming response object.
+    Caller iterates over it to get chunks.
+    Not decorated with @retry — streaming retries are handled by
+    stream_generator() directly so partial output isn't lost.
+    """
+    return _client.chat.completions.create(
+        model=GROQ_CHAT_MODEL,
+        messages=messages,
+        max_tokens=MAX_OUTPUT_TOKENS,
+        temperature=0.2,
+        stream=True,
+    )
+
+
+# ── generate() — CLI + eval ────────────────────────────────────
 
 def generate(
     messages: list[dict],
-    stream: bool = True,
+    stream:   bool = False,
 ) -> dict:
     """
-    Generate an explanation from a packed prompt.
+    Generate a hint from a packed prompt.
+    Default stream=False — cleaner for eval and CLI single-shot use.
+    Set stream=True to print tokens to console as they arrive.
 
     Args:
         messages: output of prompt_builder.build_messages()
-        stream:   stream tokens to console while generating (default True)
-                  set False in eval/batch mode for cleaner output
+        stream:   print tokens to console while generating
 
     Returns:
-        {
-            "explanation":   str,
-            "sources":       list[str],
-            "input_tokens":  int,
-            "output_tokens": int,
-            "model":         str,
-        }
+        {explanation, sources, input_tokens, output_tokens, model}
     """
     if not messages:
         return {
@@ -160,79 +134,182 @@ def generate(
         }
 
     try:
-        explanation, input_tokens, output_tokens = _call_groq(messages, stream=stream)
+        if stream:
+            # Streaming path — collect tokens and print to console
+            explanation   = ""
+            input_tokens  = 0
+            output_tokens = 0
+            with _call_groq_streaming(messages) as stream_resp:
+                for chunk in stream_resp:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        explanation += delta.content
+                        console.print(delta.content, end="", highlight=False)
+                    if chunk.usage:
+                        input_tokens  = chunk.usage.prompt_tokens
+                        output_tokens = chunk.usage.completion_tokens
+            console.print()
+        else:
+            explanation, input_tokens, output_tokens = _call_groq_blocking(messages)
+
     except RateLimitError as e:
-        console.print(f"\n[red]Groq rate limit hit:[/red] {e}")
+        console.print(f"\n[red]Groq rate limit:[/red] {e}")
         raise
     except Exception as e:
         console.print(f"\n[red]Generation failed:[/red] {e}")
         raise
 
-    sources = extract_sources(explanation)
-
     return {
         "explanation":   explanation,
-        "sources":       sources,
+        "sources":       extract_sources(explanation),
         "input_tokens":  input_tokens,
         "output_tokens": output_tokens,
         "model":         GROQ_CHAT_MODEL,
     }
 
 
+# ── stream_generator() — Streamlit ────────────────────────────
+
+class StreamResult:
+    """
+    Holds the accumulated result after stream_generator() is exhausted.
+    Access via: result = StreamResult(); ... yield from stream_generator(..., result)
+    """
+    def __init__(self):
+        self.explanation:   str       = ""
+        self.sources:       list[str] = []
+        self.input_tokens:  int       = 0
+        self.output_tokens: int       = 0
+        self.model:         str       = GROQ_CHAT_MODEL
+
+    def to_dict(self) -> dict:
+        return {
+            "explanation":   self.explanation,
+            "sources":       self.sources,
+            "input_tokens":  self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "model":         self.model,
+        }
+
+
+def stream_generator(
+    messages: list[dict],
+    result:   StreamResult | None = None,
+) -> Generator[str, None, None]:
+    """
+    Yield token strings from Groq — compatible with st.write_stream().
+
+    Usage in Streamlit:
+        result = StreamResult()
+        st.write_stream(stream_generator(messages, result))
+        # After stream is exhausted:
+        sources = result.sources
+        tokens  = result.input_tokens
+
+    Args:
+        messages: output of prompt_builder.build_messages()
+        result:   optional StreamResult instance — populated with
+                  full text, sources, and token counts after streaming.
+                  If None, a local instance is used (sources/tokens lost).
+
+    Yields:
+        str — each token chunk from the LLM as it arrives
+    """
+    if not messages:
+        return
+
+    if result is None:
+        result = StreamResult()
+
+    accumulated = ""
+    try:
+        with _call_groq_streaming(messages) as stream_resp:
+            for chunk in stream_resp:
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    accumulated           += delta.content
+                    result.explanation    += delta.content
+                    yield delta.content   # ← this is what st.write_stream() consumes
+
+                # Token counts arrive on the final chunk
+                if chunk.usage:
+                    result.input_tokens  = chunk.usage.prompt_tokens
+                    result.output_tokens = chunk.usage.completion_tokens
+
+    except RateLimitError as e:
+        error_msg = f"\n\n⚠️ Rate limit hit — please try again in a moment. ({e})"
+        result.explanation += error_msg
+        yield error_msg
+        return
+    except Exception as e:
+        error_msg = f"\n\n⚠️ Generation error: {e}"
+        result.explanation += error_msg
+        yield error_msg
+        return
+
+    # Populate sources after full text is accumulated
+    result.sources = extract_sources(result.explanation)
+
+
 # ── CLI ────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Test generation with a dummy prompt — no Pinecone needed
     from src.prompt_builder import build_messages, count_prompt_tokens
 
     dummy_chunks = [
         {
-            "chunk_id": "asyncio-task_001",
+            "chunk_id":    "so_12345_accepted_00",
             "text": (
-                "asyncio.gather(*aws, return_exceptions=False)\n\n"
-                "Run awaitable objects in the aws sequence concurrently. "
-                "If any awaitable in aws is a coroutine, it is automatically "
-                "scheduled as a Task. If all awaitables are completed "
-                "successfully, the result is an aggregate list of returned values.\n\n"
-                "If return_exceptions is False (default), the first raised "
-                "exception is immediately propagated to the task that awaits "
-                "on gather(). Other awaitables in the aws sequence won't be "
-                "cancelled and will continue to run."
+                "For the two sum problem, use a hash map to store "
+                "each number and its index. For each number, check if "
+                "its complement (target - num) already exists in the map. "
+                "This gives O(n) time complexity instead of O(n^2)."
             ),
-            "url":      "https://docs.python.org/3/library/asyncio-task.html",
-            "title":    "Coroutines and Tasks",
-            "has_code": True,
-            "score":    0.91,
+            "url":         "https://stackoverflow.com/a/12345",
+            "title":       "Two Sum - Hash Map approach",
+            "source_type": "stackoverflow",
+            "so_score":    412,
+            "is_accepted": True,
+            "topic":       None,
+            "score":       0.91,
         },
     ]
 
-    dummy_code = """\
-async def main():
-    results = await asyncio.gather(
-        fetch("https://example.com"),
-        fetch("https://example.org"),
-        return_exceptions=True,
+    dummy_problem = (
+        "Given an array of integers and a target, "
+        "return indices of two numbers that add up to target."
     )
-    return results
+    dummy_code = """\
+def two_sum(nums, target):
+    for i in range(len(nums)):
+        for j in range(i+1, len(nums)):
+            if nums[i] + nums[j] == target:
+                return [i, j]
 """
-    dummy_question = "What does return_exceptions=True do in asyncio.gather?"
-
-    console.print("\n[bold]Generator test[/bold]\n")
 
     messages = build_messages(
         chunks=dummy_chunks,
-        question=dummy_question,
+        question=dummy_problem,
         code_snippet=dummy_code,
     )
 
+    console.print(f"\n[bold]Generator test[/bold]")
     console.print(f"[dim]Prompt tokens : {count_prompt_tokens(messages)}[/dim]")
     console.print(f"[dim]Model         : {GROQ_CHAT_MODEL}[/dim]")
-    console.print("\n[bold]Response:[/bold]\n")
 
-    result = generate(messages, stream=True)
+    # ── Test 1: generate() ────────────────────────────────────
+    console.print("\n[bold]Test 1 — generate() non-streaming:[/bold]\n")
+    result = generate(messages, stream=False)
+    console.print(result["explanation"][:400] + "...")
+    console.print(f"\n[dim]sources={result['sources']}[/dim]")
+    console.print(f"[dim]tokens: in={result['input_tokens']} out={result['output_tokens']}[/dim]")
 
-    console.print("\n[bold]Result dict:[/bold]")
-    console.print(f"  sources       : {result['sources']}")
-    console.print(f"  input_tokens  : {result['input_tokens']}")
-    console.print(f"  output_tokens : {result['output_tokens']}")
-    console.print(f"  model         : {result['model']}\n")
+    # ── Test 2: stream_generator() ───────────────────────────
+    console.print("\n[bold]Test 2 — stream_generator() (simulates st.write_stream):[/bold]\n")
+    sr = StreamResult()
+    for token in stream_generator(messages, sr):
+        console.print(token, end="", highlight=False)
+    console.print()
+    console.print(f"\n[dim]sources={sr.sources}[/dim]")
+    console.print(f"[dim]tokens: in={sr.input_tokens} out={sr.output_tokens}[/dim]\n")
