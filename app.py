@@ -13,8 +13,8 @@ from src.config        import (
 
 # ── Page config ────────────────────────────────────────────────
 st.set_page_config(
-    page_title="DSA Hint Engine",
-    page_icon="⚡",
+    page_title="Recurse",
+    page_icon="assets/recurse.png",
     layout="wide",
     initial_sidebar_state="expanded",
 )
