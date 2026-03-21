@@ -6,6 +6,7 @@ Run:
 """
 
 import streamlit as st
+import html as html_lib
 from src.pipeline      import hint
 from src.retriever     import retrieve
 from src.reranker      import rerank
@@ -318,9 +319,9 @@ with st.sidebar:
 
 # ── Header ─────────────────────────────────────────────────────
 st.markdown("""
-<div class="dsa-header">
-    <p class="dsa-title">DSA Hint Engine</p>
-    <p class="dsa-sub">Paste a problem + your stuck code → get a targeted hint, not the answer</p>
+<div class="dsa-header" style="text-align:center">
+    <p class="dsa-title" style="font-size:3.2rem;justify-content:center">DSA Hint Engine</p>
+    <p class="dsa-sub" style="font-size:1.05rem">Paste a problem + your stuck code → get a targeted hint, not the answer</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -380,11 +381,17 @@ if submitted:
             )
             st.stop()
 
-        # ── Build prompt + stream ──────────────────────────────
+        # ── Detect mode + build prompt ────────────────────────
+        from src.pipeline import _detect_mode
+        mode = _detect_mode(problem.strip())
+        mode_label = "🛠 Code Fix Mode" if mode == "code_fix" else "💡 Hint Mode"
+        st.caption(mode_label)
+
         messages = build_messages(
             chunks=chunks,
-            question=problem.strip(),
+            problem=problem.strip(),
             code_snippet=code.strip() if code.strip() else None,
+            mode=mode,
         )
 
         sr = StreamResult()
@@ -397,34 +404,34 @@ if submitted:
         with st.spinner(""):
             for token in stream_generator(messages, sr):
                 full_text += token
-                response_placeholder.markdown(
-                    f'<div class="hint-box">{full_text}</div>',
-                    unsafe_allow_html=True,
-                )
+                response_placeholder.markdown(full_text)
 
         # ── Parse and render hint as structured sections ───────
         import re
 
-        def render_hint(text: str) -> str:
+        def render_hint_native(text: str) -> None:
             """
-            Convert LLM hint text into styled HTML sections.
-            Detects numbered points (1. 2. 3. 4.) and renders
-            each as a distinct visual block.
+            Render hint using native Streamlit components.
+            Splits on numbered points and renders each as a
+            separate st.markdown() — Streamlit handles code
+            blocks natively with proper syntax highlighting.
             """
-            # Split on numbered points: 1. 2. 3. 4.
-            parts = re.split(r'(?=^\d+\.\s)', text.strip(), flags=re.MULTILINE)
-            if len(parts) <= 1:
-                # No numbered structure — render as plain hint box
-                return f'<div class="hint-box">{text}</div>'
-
             icons = {
-                "1": ("🔍", "#a89df7"),  # pattern
-                "2": ("💭", "#4ecdc4"),  # why
-                "3": ("🛠", "#f9c74f"),  # fix hint
-                "4": ("📖", "#90e0ef"),  # study
+                "1": "🔍", "2": "💭",
+                "3": "🛠", "4": "📖",
+            }
+            colors = {
+                "1": "#a89df7", "2": "#4ecdc4",
+                "3": "#f9c74f", "4": "#90e0ef",
             }
 
-            html = '<div style="display:flex;flex-direction:column;gap:10px">'
+            parts = re.split(r'(?=^\d+\.\s)', text.strip(), flags=re.MULTILINE)
+
+            if len(parts) <= 1:
+                # No numbered structure — render as-is
+                st.markdown(text)
+                return
+
             for part in parts:
                 part = part.strip()
                 if not part:
@@ -433,35 +440,37 @@ if submitted:
                 if num_match:
                     num   = num_match.group(1)
                     body  = part[num_match.end():]
-                    # Bold the label if present (e.g. "Pattern identified: X")
-                    body  = re.sub(
-                        r'^([^:]+:)',
-                        r'<strong style="font-weight:600">\1</strong>',
-                        body.strip()
-                    )
-                    icon, color = icons.get(num, ("•", "#e8eaf0"))
-                    html += (
-                        f'<div style="background:#13161b;border:1px solid #252a35;'
-                        f'border-left:3px solid {color};border-radius:8px;'
-                        f'padding:10px 14px;font-size:0.9rem;line-height:1.7;color:#e8eaf0">'
-                        f'<span style="font-size:1rem;margin-right:8px">{icon}</span>'
-                        f'{body}'
-                        f'</div>'
-                    )
-                else:
-                    html += (
-                        f'<div style="background:#13161b;border:1px solid #252a35;'
-                        f'border-radius:8px;padding:10px 14px;font-size:0.9rem;'
-                        f'line-height:1.7;color:#e8eaf0">{part}</div>'
-                    )
-            html += '</div>'
-            return html
+                    icon  = icons.get(num, "•")
+                    color = colors.get(num, "#e8eaf0")
 
-        # Re-render final hint with structured sections
-        response_placeholder.markdown(
-            render_hint(sr.explanation),
-            unsafe_allow_html=True,
-        )
+                    # Split label from body — label ends at first \n
+                    # but keep entire body together for st.markdown so
+                    # code blocks are never split across calls
+                    lines      = body.split("\n")
+                    label_line = lines[0].strip()
+                    body_rest  = "\n".join(lines[1:]).strip()
+
+                    # Colored section header
+                    st.markdown(
+                        f'<div style="border-left:3px solid {color};'
+                        f'padding:6px 12px;margin:10px 0 4px;'
+                        f'font-weight:600;font-size:0.9rem;color:{color}">'
+                        f'{icon}&nbsp;&nbsp;{label_line}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    # Body — full native st.markdown so code blocks
+                    # with ``` get proper syntax highlighting
+                    if body_rest:
+                        st.markdown(body_rest)
+                    elif not body_rest and "```" in label_line:
+                        # Edge case: entire body is a code block on same line
+                        st.markdown(body)
+                else:
+                    st.markdown(part)
+
+        # Clear the streaming placeholder and render structured output
+        response_placeholder.empty()
+        render_hint_native(sr.explanation)
 
         # ── Pattern badge ──────────────────────────────────────
         pattern_match = re.search(
@@ -563,20 +572,20 @@ if submitted:
                 )
 
         # ── Retrieval debug expander ───────────────────────────
-        with st.expander("🔍 Retrieval details", expanded=False):
-            st.markdown(
-                f"**Query:** `{retrieval_query[:120]}{'...' if len(retrieval_query) > 120 else ''}`\n\n"
-                f"**Threshold:** `{threshold}`  **Top-K:** `{top_k}`  **Top-N:** `{top_n}`\n\n"
-                f"**Chunks retrieved:** {len(chunks)}"
-            )
-            for i, c in enumerate(chunks, 1):
-                rs       = c.get("rerank_score", None)
-                vs       = c.get("score", 0.0)
-                rs_str   = f"{rs:.4f}" if isinstance(rs, float) else "—"
-                vs_str   = f"{vs:.3f}" if isinstance(vs, float) else "—"
-                src      = c.get("source_type", "?")
-                cid      = c.get("chunk_id", "")
-                st.markdown(
-                    f"{i}. **{src}** — {cid}  "
-                    f"vec={vs_str}  rerank={rs_str}"
-                )
+        # with st.expander("🔍 Retrieval details", expanded=False):
+        #     st.markdown(
+        #         f"**Query:** `{retrieval_query[:120]}{'...' if len(retrieval_query) > 120 else ''}`\n\n"
+        #         f"**Threshold:** `{threshold}`  **Top-K:** `{top_k}`  **Top-N:** `{top_n}`\n\n"
+        #         f"**Chunks retrieved:** {len(chunks)}"
+        #     )
+        #     for i, c in enumerate(chunks, 1):
+        #         rs       = c.get("rerank_score", None)
+        #         vs       = c.get("score", 0.0)
+        #         rs_str   = f"{rs:.4f}" if isinstance(rs, float) else "—"
+        #         vs_str   = f"{vs:.3f}" if isinstance(vs, float) else "—"
+        #         src      = c.get("source_type", "?")
+        #         cid      = c.get("chunk_id", "")
+        #         st.markdown(
+        #             f"{i}. **{src}** — {cid}  "
+        #             f"vec={vs_str}  rerank={rs_str}"
+        #         )

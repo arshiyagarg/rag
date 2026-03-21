@@ -34,39 +34,44 @@ from src.prompt_builder import build_messages, count_prompt_tokens
 from src.generator      import generate
 from src.config         import RETRIEVAL_TOP_K, RETRIEVAL_SCORE_THRESHOLD, JINA_RERANKER_TOP_N
 
-console = Console()
-
-# Regex to extract the algorithm pattern from the LLM response.
-# Matches several phrasings the LLM commonly uses:
-#   "Pattern identified: X", "Pattern: X", "Approach: X",
-#   "This is a sliding window problem", "use dynamic programming", etc.
-_PATTERN_PHRASES = re.compile(
-    r"(?:"
-    r"pattern\s*(?:identified|used|here|to use)?\s*[:\-–]?\s*"
-    r"|approach\s*[:\-–]\s*"
-    r"|algorithm\s*[:\-–]\s*"
-    r")"
-    r"\**([\w][\w ,/\-]+?)\**"
-    r"(?:\.|,|\n|$)",
+# Pattern to extract "Pattern identified: X" from LLM response
+PATTERN_RE = re.compile(
+    r"pattern identified[:\s*_]*(.+?)(?:\n|$)",
     re.IGNORECASE,
 )
-_USE_PATTERN = re.compile(
-    r"(?:use|using|apply|applies|with)\s+(?:a\s+|an\s+|the\s+)?"
-    r"((?:sliding window|two pointer|hash map|dynamic programming|BFS|DFS"
-    r"|binary search|backtracking|greedy|divide and conquer|trie|heap"
-    r"|union.find|topological sort|monotonic stack|prefix sum)[\w ]*)",
+
+# Keywords that signal the user wants corrected code, not just hints
+CODE_FIX_KEYWORDS = [
+    "fix", "correct", "solution", "show me", "give me",
+    "write", "what is wrong", "whats wrong", "what's wrong",
+    "debug", "correct code", "fixed code", "corrected",
+    "how to fix", "how do i fix", "what should i change",
+]
+
+def _detect_mode(problem: str) -> str:
+    """
+    Detect whether the user wants a hint or corrected code.
+    Returns "code_fix" or "hint".
+    """
+    problem_lower = problem.lower()
+    if any(kw in problem_lower for kw in CODE_FIX_KEYWORDS):
+        return "code_fix"
+    return "hint"
+
+console = Console()
+
+# Regex to extract "Pattern identified: X" from LLM response
+PATTERN_RE = re.compile(
+    r"pattern identified[:\s*_]*(.+?)(?:\n|$)",
     re.IGNORECASE,
 )
 
 
 def _extract_pattern(text: str) -> str:
     """Pull the algorithm pattern name from the LLM response."""
-    m = _PATTERN_PHRASES.search(text)
-    if m:
-        return m.group(1).strip().strip("*_")
-    m = _USE_PATTERN.search(text)
-    if m:
-        return m.group(1).strip().strip("*_")
+    match = PATTERN_RE.search(text)
+    if match:
+        return match.group(1).strip().strip("*_")
     return "Unknown"
 
 
@@ -99,9 +104,15 @@ def hint(
     t_start = time.monotonic()
 
     # ── Step 1: Build retrieval query ──────────────────────────
-    # Combine problem + code for better semantic matching
+    # Detect mode early for query building
+    mode = _detect_mode(problem)
     if code_snippet and code_snippet.strip():
-        retrieval_query = f"{problem}\n\n{code_snippet.strip()}"
+        if mode == "code_fix":
+            # Prefix with "bug fix:" to retrieve implementation-specific chunks
+            # rather than general algorithm theory
+            retrieval_query = f"bug fix: {problem}\n\n{code_snippet.strip()}"
+        else:
+            retrieval_query = f"{problem}\n\n{code_snippet.strip()}"
     else:
         retrieval_query = problem
 
@@ -110,7 +121,6 @@ def hint(
         retrieval_query,
         top_k=top_k,
         score_threshold=score_threshold,
-        rerank=False,   # pipeline reranks explicitly below with clean `problem` query
     )
 
     if verbose:
@@ -129,9 +139,7 @@ def hint(
         )
 
     # ── Step 3: Rerank ─────────────────────────────────────────
-    # Use problem (short) as the rerank query — not retrieval_query
-    # (problem + code). Jina 422s on queries longer than ~500 chars.
-    reranked = rerank(problem, chunks, top_n=top_n)
+    reranked = rerank(retrieval_query, chunks, top_n=top_n)
 
     if verbose and reranked:
         console.print(f"[dim]After reranking — top {len(reranked)} chunks:[/dim]")
@@ -143,10 +151,12 @@ def hint(
         console.print()
 
     # ── Step 4: Build prompt ───────────────────────────────────
+    # mode already detected during retrieval query building
     messages = build_messages(
         chunks=reranked,
-        question=problem,
+        problem=problem,
         code_snippet=code_snippet,
+        mode=mode,
     )
 
     if verbose:

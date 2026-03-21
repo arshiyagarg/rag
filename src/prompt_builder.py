@@ -1,15 +1,13 @@
 """
 prompt_builder.py — pack retrieved chunks into an LLM-ready prompt
 
-Takes a list of chunk dicts from retriever.py and a user question,
-builds a structured system prompt with XML source tags, caps context
-at MAX_CONTEXT_TOKENS using tiktoken, and returns a messages list
-ready to pass directly to the Groq client.
+Builds a DSA hint prompt — guides the user toward the solution
+without revealing it. Cites SO answers and CP-Algorithms articles.
 
 Single public function:
-    build_messages(chunks, code_snippet, question) -> list[dict]
+    build_messages(chunks, problem, code_snippet) -> list[dict]
 
-Run directly to preview a prompt without calling the LLM:
+Run directly to preview a prompt:
     python -m src.prompt_builder
 """
 
@@ -20,237 +18,246 @@ from src.config import MAX_CONTEXT_TOKENS
 
 console = Console()
 
-# ── Tokeniser ──────────────────────────────────────────────────
-# cl100k_base is close enough to llama token counts for budget purposes
 _enc = tiktoken.get_encoding("cl100k_base")
 
 def _count_tokens(text: str) -> int:
     return len(_enc.encode(text))
 
 
-# ── System prompt template ─────────────────────────────────────
-# The LLM is instructed to:
-#   1. Explain the code using ONLY the provided sources
-#   2. Cite sources inline using [SOURCE: url] markers
-#   3. Never hallucinate — say "not covered in sources" if unsure
+# ── System prompts ────────────────────────────────────────────
+# Two modes: hint (no code) and code-fix (corrected code on request)
 
-SYSTEM_PROMPT_HEADER = """\
-You are an expert Python educator specialising in asyncio and async programming.
-Your job is to explain code snippets clearly and accurately using ONLY the \
-reference documentation provided below.
+HINT_PROMPT_HEADER = """You are an expert DSA tutor. Your job is to give HINTS only — never write code, never reveal the full solution.
 
 Rules:
-- Base every explanation on the <source> blocks provided. Do not invent information.
-- Cite sources inline like this: [SOURCE: url]
-- If the answer is not covered in the sources, say exactly:
-  "This specific behaviour is not covered in the provided documentation."
-- Structure your explanation as:
-  1. What the code does (1-2 sentences)
-  2. Key concepts explained (with citations)
-  3. Common pitfalls or notes (if covered in sources)
-- Keep the explanation concise and practical.
+- Identify the algorithm pattern (Sliding Window, BFS, DP, Two Pointers, etc.)
+- Explain WHY that pattern applies to this specific problem
+- Point out conceptually what is wrong in the student's code — NO code whatsoever
+- Do NOT write any code blocks, snippets, or corrected versions
+- Base every explanation strictly on the <source> blocks provided below
+- Cite sources inline: [SOURCE: url]
+- If not covered in sources say exactly: "This pattern is not in the provided references."
 
-Reference documentation:
+Structure your response EXACTLY as:
+1. Pattern identified: <name the pattern>
+2. Why this pattern: <1-2 sentences with citation>
+3. What's wrong in your code: <specific conceptual issue, absolutely no code>
+4. Key concept to study: <with citation>
+"""
+
+CODE_FIX_PROMPT_HEADER = """You are an expert DSA tutor. The student is asking for corrected code.
+
+CRITICAL LANGUAGE RULE: You MUST write the corrected code in the EXACT SAME
+programming language as the student's code. If the student wrote C++, you write
+C++. If Python, write Python. NEVER translate to a different language.
+
+Rules:
+- Read the student's code carefully and identify the SPECIFIC lines that are wrong
+- Make MINIMAL changes — only fix the bug, do not rewrite the entire solution
+- The corrected code must be in the SAME language as the student's input
+- Do NOT translate C++ to Python, Python to Java, etc. under any circumstance
+- Ground the fix in the <source> blocks below — do not invent logic
+- If the sources don't cover this specific bug, say so explicitly
+- Cite sources inline: [SOURCE: url]
+
+Structure your response EXACTLY as:
+1. Pattern identified: <name the pattern>
+2. What was wrong: <the specific line(s) and why they are wrong>
+3. Corrected code (same language as student):
+```
+<minimal corrected code in student's original language>
+```
+4. Why this fixes it: <explanation with citation>
 """
 
 SYSTEM_PROMPT_FOOTER = """
-Use only the sources above. Cite them inline with [SOURCE: url].
+Use only the sources above. Cite them with [SOURCE: url].
 """
 
-# Token budget breakdown
-# Total cap: MAX_CONTEXT_TOKENS
-# Reserved for header + footer + user turn overhead: ~400 tokens
-# Remaining budget allocated to source chunks
 OVERHEAD_TOKENS = 400
 
 
 # ── Source block formatting ────────────────────────────────────
 
 def _format_source_block(chunk: dict, index: int) -> str:
-    """
-    Format a single chunk as an XML source block.
+    """Format a chunk as an XML source block with rich metadata."""
+    src_type  = chunk.get("source_type", "unknown")
+    so_score  = chunk.get("so_score")
+    is_acc    = chunk.get("is_accepted")
+    topic     = chunk.get("topic", "")
 
-    Example output:
-        <source index="1" url="https://..." title="Coroutines and Tasks">
-        Tasks are used to schedule coroutines concurrently...
-        </source>
-    """
+    # Build attribute string based on source type
+    if src_type == "stackoverflow":
+        extra = f'score="{so_score}" accepted="{is_acc}"'
+    elif src_type == "cp_algorithms":
+        extra = f'topic="{topic}"'
+    else:
+        extra = ""
+
     return (
-        f'<source index="{index}" '
-        f'url="{chunk["url"]}" '
-        f'title="{chunk["title"]}">\n'
+        f'<source index="{index}" type="{src_type}" '
+        f'url="{chunk["url"]}" title="{chunk["title"]}" {extra}>\n'
         f'{chunk["text"].strip()}\n'
         f'</source>'
     )
 
 
 def _pack_sources(chunks: list[dict], token_budget: int) -> tuple[str, int]:
-    """
-    Pack as many chunks as fit within the token budget.
-    Chunks are already sorted by relevance score (highest first).
-
-    Returns:
-        (sources_text, chunks_included_count)
-    """
+    """Pack chunks into token budget, highest score first."""
     blocks: list[str] = []
     tokens_used = 0
 
     for i, chunk in enumerate(chunks, start=1):
-        block = _format_source_block(chunk, i)
+        block        = _format_source_block(chunk, i)
         block_tokens = _count_tokens(block)
-
         if tokens_used + block_tokens > token_budget:
-            # This chunk would exceed budget — skip remaining
             break
-
         blocks.append(block)
         tokens_used += block_tokens
 
-    sources_text = "\n\n".join(blocks)
-    return sources_text, len(blocks)
+    return "\n\n".join(blocks), len(blocks)
 
 
-# ── User turn formatting ───────────────────────────────────────
+# ── User turn ──────────────────────────────────────────────────
 
-def _format_user_turn(code_snippet: str | None, question: str) -> str:
-    """
-    Build the user message content.
-    Code snippet is optional — questions without code are valid.
-    """
-    parts: list[str] = []
+def _detect_language(code: str) -> str:
+    """Heuristic language detection from code snippet."""
+    code_lower = code.lower()
+    if any(kw in code for kw in ["#include", "vector<", "int main", "::", "cout", "->", "auto "]):
+        return "C++"
+    if any(kw in code for kw in ["def ", "import ", "print(", "elif ", "None", "True", "False"]):
+        return "Python"
+    if any(kw in code for kw in ["public class", "System.out", "void ", "ArrayList", "import java"]):
+        return "Java"
+    if any(kw in code for kw in ["function ", "const ", "let ", "var ", "console.log", "=>"]):
+        return "JavaScript"
+    return "the same language as above"
 
+
+def _format_user_turn(problem: str, code_snippet: str | None) -> str:
+    """Build the user message with problem description and optional code."""
+    parts: list[str] = [f"Problem:\n{problem.strip()}"]
     if code_snippet and code_snippet.strip():
+        lang = _detect_language(code_snippet)
         parts.append(
-            f"Here is the code I want to understand:\n\n"
-            f"```python\n{code_snippet.strip()}\n```"
+            f"My current code (written in {lang} — fix must also be in {lang}):\n\n"
+            f"```\n{code_snippet.strip()}\n```"
         )
-
-    parts.append(f"Question: {question.strip()}")
     return "\n\n".join(parts)
 
 
 # ── Main builder ───────────────────────────────────────────────
 
 def build_messages(
-    chunks: list[dict],
-    question: str,
+    chunks:       list[dict],
+    problem:      str,
     code_snippet: str | None = None,
+    mode:         str        = "hint",
 ) -> list[dict]:
     """
-    Build the messages list for the Groq chat completion API.
+    Build messages list for Groq chat completion.
 
     Args:
-        chunks:       ranked chunks from retriever.py (highest score first)
-        question:     the user's question about the code
-        code_snippet: optional code the user wants explained
+        chunks:       reranked chunks from retriever.py
+        problem:      DSA problem description
+        code_snippet: student's current code — optional
+        mode:         "hint"     → no code in response, hints only
+                      "code_fix" → corrected code grounded in sources
 
     Returns:
-        list of message dicts:
-        [
-            {"role": "system", "content": "..."},
-            {"role": "user",   "content": "..."},
-        ]
+        [{"role": "system", ...}, {"role": "user", ...}]
     """
+    header = CODE_FIX_PROMPT_HEADER if mode == "code_fix" else HINT_PROMPT_HEADER
+
     if not chunks:
-        # No context retrieved — still attempt but warn the LLM
         system_content = (
-            SYSTEM_PROMPT_HEADER.strip()
-            + "\n\n<source>No relevant documentation found.</source>\n"
+            header.strip()
+            + "\n\n<source>No relevant references found.</source>\n"
             + SYSTEM_PROMPT_FOOTER.strip()
         )
-        user_content = _format_user_turn(code_snippet, question)
         return [
             {"role": "system", "content": system_content},
-            {"role": "user",   "content": user_content},
+            {"role": "user",   "content": _format_user_turn(problem, code_snippet)},
         ]
 
-    # Calculate token budget for source chunks
-    header_tokens    = _count_tokens(SYSTEM_PROMPT_HEADER + SYSTEM_PROMPT_FOOTER)
-    user_tokens      = _count_tokens(_format_user_turn(code_snippet, question))
+    header_tokens    = _count_tokens(header + SYSTEM_PROMPT_FOOTER)
+    user_tokens      = _count_tokens(_format_user_turn(problem, code_snippet))
     available_budget = MAX_CONTEXT_TOKENS - header_tokens - user_tokens - OVERHEAD_TOKENS
+    available_budget = max(available_budget, MAX_CONTEXT_TOKENS // 2)
 
-    if available_budget <= 0:
-        console.print(
-            "[yellow]Warning:[/yellow] question + code snippet is very long, "
-            "leaving little room for source context."
-        )
-        available_budget = MAX_CONTEXT_TOKENS // 2
-
-    # Pack sources into the budget
     sources_text, n_included = _pack_sources(chunks, available_budget)
 
     if n_included < len(chunks):
         console.print(
-            f"[dim]Context cap: included {n_included}/{len(chunks)} chunks "
-            f"(budget={available_budget} tokens)[/dim]"
+            f"[dim]Context cap: {n_included}/{len(chunks)} chunks included[/dim]"
         )
 
-    system_content = (
-        SYSTEM_PROMPT_HEADER
-        + sources_text
-        + SYSTEM_PROMPT_FOOTER
-    )
-    user_content = _format_user_turn(code_snippet, question)
-
+    system_content = header + sources_text + SYSTEM_PROMPT_FOOTER
     return [
         {"role": "system", "content": system_content},
-        {"role": "user",   "content": user_content},
+        {"role": "user",   "content": _format_user_turn(problem, code_snippet)},
     ]
 
 
 def count_prompt_tokens(messages: list[dict]) -> int:
-    """Return total token count across all messages. Used for logging."""
     return sum(_count_tokens(m["content"]) for m in messages)
 
 
 # ── CLI preview ────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Dummy chunks to preview prompt structure without needing Pinecone
     dummy_chunks = [
         {
-            "chunk_id": "asyncio-task_001",
+            "chunk_id":    "so_12345_accepted_00",
             "text": (
-                "asyncio.gather(*aws, return_exceptions=False)\n\n"
-                "Run awaitable objects in the aws sequence concurrently.\n"
-                "If any awaitable in aws is a coroutine, it is automatically "
-                "scheduled as a Task. If all awaitables are completed successfully, "
-                "the result is an aggregate list of returned values."
+                "For finding the longest substring without repeating characters, "
+                "the sliding window technique is the most efficient approach. "
+                "Maintain a window with two pointers and a set tracking current chars. "
+                "When a duplicate is found, shrink the window from the left."
             ),
-            "url":      "https://docs.python.org/3/library/asyncio-task.html",
-            "title":    "Coroutines and Tasks",
-            "has_code": True,
-            "score":    0.91,
+            "url":         "https://stackoverflow.com/a/12345",
+            "title":       "Longest substring without repeating characters",
+            "source_type": "stackoverflow",
+            "so_score":    312,
+            "is_accepted": True,
+            "topic":       None,
         },
         {
-            "chunk_id": "asyncio-task_002",
+            "chunk_id":    "cp_string_hashing_001",
             "text": (
-                "If return_exceptions is False (default), the first raised exception "
-                "is immediately propagated to the task that awaits on gather(). "
-                "Other awaitables in the aws sequence won't be cancelled and will "
-                "continue to run."
+                "## Two Pointers / Sliding Window\n\n"
+                "The sliding window technique uses two pointers to represent "
+                "the current window boundaries. The key insight is that we never "
+                "need to re-examine characters that were already processed."
             ),
-            "url":      "https://docs.python.org/3/library/asyncio-task.html",
-            "title":    "Coroutines and Tasks",
-            "has_code": False,
-            "score":    0.84,
+            "url":         "https://cp-algorithms.com/string/hashing.html",
+            "title":       "String Hashing",
+            "source_type": "cp_algorithms",
+            "so_score":    None,
+            "is_accepted": None,
+            "topic":       "string",
         },
     ]
 
+    dummy_problem = (
+        "Given a string s, find the length of the longest substring "
+        "without repeating characters."
+    )
     dummy_code = """\
-async def fetch_all(urls):
-    results = await asyncio.gather(*[fetch(url) for url in urls])
-    return results
+def length_of_longest_substring(s):
+    result = 0
+    for i in range(len(s)):
+        for j in range(i, len(s)):
+            if len(set(s[i:j])) == j - i:
+                result = max(result, j - i)
+    return result
 """
-    dummy_question = "What happens if one of the fetches raises an exception?"
 
     messages = build_messages(
         chunks=dummy_chunks,
-        question=dummy_question,
+        problem=dummy_problem,
         code_snippet=dummy_code,
     )
-
-    total_tokens = count_prompt_tokens(messages)
 
     console.print("\n[bold]Prompt preview[/bold]\n")
     for msg in messages:
@@ -259,6 +266,5 @@ async def fetch_all(urls):
 
     console.print()
     console.rule()
-    console.print(f"[dim]Total prompt tokens: {total_tokens}[/dim]")
-    console.print(f"[dim]Token cap: {MAX_CONTEXT_TOKENS}[/dim]")
-    console.print(f"[dim]Headroom: {MAX_CONTEXT_TOKENS - total_tokens} tokens[/dim]\n")
+    tokens = count_prompt_tokens(messages)
+    console.print(f"[dim]Total tokens: {tokens} / {MAX_CONTEXT_TOKENS}[/dim]\n")

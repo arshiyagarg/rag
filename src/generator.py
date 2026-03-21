@@ -42,7 +42,8 @@ console = Console()
 _client = Groq(api_key=GROQ_API_KEY)
 
 MAX_OUTPUT_TOKENS  = 1024
-SOURCE_CITATION_RE = re.compile(r"\[SOURCE:\s*(https?://[^\]]+)\]")
+# Handles [SOURCE: url] and [SOURCE: __url__] (LLM markdown artifacts)
+SOURCE_CITATION_RE = re.compile(r"\[SOURCE:\s*[_*]*(https?://[^\]_*\s]+)[_*]*\]")
 
 
 # ── Citation extraction ────────────────────────────────────────
