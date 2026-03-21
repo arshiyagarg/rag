@@ -1,28 +1,3 @@
-"""
-pipeline.py — end-to-end hint() function for the DSA Hint Engine
-
-Wires retriever → reranker → prompt_builder → generator.
-
-Single public function:
-    hint(problem, code_snippet=None) -> dict
-
-Returned dict:
-{
-    "hint":          "...",
-    "pattern":       "Sliding Window",
-    "sources":       ["url1", "url2"],
-    "chunks_used":   5,
-    "input_tokens":  412,
-    "output_tokens": 284,
-    "model":         "llama-3.3-70b-versatile",
-    "elapsed_sec":   2.4
-}
-
-Run directly:
-    python -m src.pipeline
-    python -m src.pipeline --problem "two sum" --code "..."
-"""
-
 import re
 import time
 from rich.console import Console

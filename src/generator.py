@@ -1,28 +1,3 @@
-"""
-generator.py — call Groq LLM and parse the response
-
-Three public functions:
-    generate(messages, stream)         → dict        CLI + eval
-    stream_generator(messages)         → Generator   Streamlit st.write_stream()
-    extract_sources(text)              → list[str]   parse [SOURCE: url] citations
-
-generate() returns:
-{
-    "explanation":  "...",
-    "sources":      ["url1", ...],
-    "input_tokens":  412,
-    "output_tokens": 284,
-    "model":        "llama-3.3-70b-versatile"
-}
-
-stream_generator() yields raw token strings — compatible with st.write_stream().
-After the generator is exhausted, call get_stream_result() to get the full
-result dict with sources and token counts.
-
-Run directly to test:
-    python -m src.generator
-"""
-
 import re
 from typing import Generator
 from groq import Groq, RateLimitError, APIStatusError

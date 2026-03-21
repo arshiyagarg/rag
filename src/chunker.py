@@ -1,33 +1,3 @@
-"""
-chunker.py — split documents from all sources into embedding-ready chunks
-
-Handles two source types:
-    - stackoverflow (DSA Q&A via so_crawler.py)
-    - cp_algorithms (DSA articles via cp_crawler.py)
-
-Each output chunk has this shape:
-{
-    "chunk_id":    "so_12345_ans_0",
-    "text":        "...",
-    "url":         "https://stackoverflow.com/a/67890",
-    "title":       "How to find longest substring without repeating characters",
-    "source_type": "stackoverflow",
-    "topic":       "graph",               # cp_algorithms only
-    "so_score":    189,                   # stackoverflow only
-    "is_accepted": true,                  # stackoverflow only
-    "has_code":    true,
-    "char_count":  312,
-    "chunk_index": 0,
-    "total_chunks": 3
-}
-
-Run directly:
-    python -m src.chunker                        # chunk all sources
-    python -m src.chunker --source stackoverflow # single source
-    python -m src.chunker --source cp_algorithms # single source
-    python -m src.chunker --inspect 5            # inspect random chunks
-"""
-
 import json
 import re
 from pathlib import Path

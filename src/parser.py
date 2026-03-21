@@ -1,23 +1,3 @@
-"""
-parser.py — clean raw HTML → structured JSON documents
-
-Reads HTML files from data/raw/, extracts clean body text using
-trafilatura, and saves one JSON file per page to data/parsed/.
-
-Each output JSON has this shape:
-{
-    "url":      "https://docs.python.org/3/library/asyncio-task.html",
-    "title":    "Coroutines and Tasks",
-    "body":     "clean plain text...",
-    "sections": ["Creating Tasks", "Awaitables", ...],
-    "has_code": true,
-    "char_count": 4821
-}
-
-Run directly:
-    python -m src.parser
-"""
-
 import json
 import re
 from pathlib import Path

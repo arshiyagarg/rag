@@ -1,16 +1,3 @@
-"""
-prompt_builder.py — pack retrieved chunks into an LLM-ready prompt
-
-Builds a DSA hint prompt — guides the user toward the solution
-without revealing it. Cites SO answers and CP-Algorithms articles.
-
-Single public function:
-    build_messages(chunks, problem, code_snippet) -> list[dict]
-
-Run directly to preview a prompt:
-    python -m src.prompt_builder
-"""
-
 import tiktoken
 from rich.console import Console
 

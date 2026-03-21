@@ -1,16 +1,3 @@
-"""
-embedder.py — embed chunks with Gemini and upsert to Pinecone
-
-Gemini free tier limits:
-  - 100 requests/minute  (we use a rolling window to stay under)
-  - 15 RPM on some accounts — if you hit 429s still, set EMBED_RPM_LIMIT=15 in .env
-
-Run directly:
-    python -m src.embedder
-    python -m src.embedder --dry-run
-    python -m src.embedder --delete-index
-"""
-
 import time
 from collections import deque
 from pathlib import Path

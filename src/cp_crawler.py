@@ -1,33 +1,3 @@
-"""
-cp_crawler.py — fetch DSA articles from CP-Algorithms via GitHub API
-
-Fetches Markdown articles directly from the cp-algorithms/cp-algorithms
-GitHub repo (CC-BY-SA 4.0 license, openly crawlable).
-
-Articles are organised by DSA topic folder:
-    data_structures/, dynamic_programming/, graph/, string/,
-    algebra/, combinatorics/, geometry/, num_methods/
-
-Each saved JSON has this shape:
-{
-    "title":       "Segment Tree",
-    "topic":       "data_structures",
-    "body":        "clean markdown text...",
-    "url":         "https://cp-algorithms.com/data_structures/segment_tree.html",
-    "raw_url":     "https://raw.githubusercontent.com/...",
-    "source_type": "cp_algorithms"
-}
-
-GitHub API rate limits:
-    - Unauthenticated: 60 req/hr
-    - Authenticated  : 5,000 req/hr (set GITHUB_TOKEN in .env)
-
-Run directly:
-    python -m src.cp_crawler
-    python -m src.cp_crawler --topics graph data_structures
-    python -m src.cp_crawler --force
-"""
-
 import json
 import re
 import time

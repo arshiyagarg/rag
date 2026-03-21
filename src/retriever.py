@@ -1,38 +1,3 @@
-"""
-retriever.py — query Pinecone, optionally filter by source, rerank results
-
-Pipeline:
-    embed query (Gemini RETRIEVAL_QUERY)
-        → Pinecone top-K by vector similarity
-        → optional source_type filter
-        → Jina reranker top-N
-        → return ranked chunks
-
-Public functions:
-    retrieve(query, top_k, score_threshold, source_filter) -> list[dict]
-
-Each returned chunk dict:
-{
-    "chunk_id":    "so_12345_accepted_00",
-    "text":        "...",
-    "url":         "https://stackoverflow.com/a/12345",
-    "title":       "Two Sum - Hash Map approach",
-    "source_type": "stackoverflow",
-    "so_score":    412,
-    "is_accepted": true,
-    "topic":       null,
-    "has_code":    true,
-    "score":       0.87,        # Pinecone vector similarity
-    "rerank_score": 0.9124      # Jina rerank score (added after reranking)
-}
-
-Run directly:
-    python -m src.retriever "how to solve two sum"
-    python -m src.retriever "dijkstra algorithm" --source cp_algorithms
-    python -m src.retriever "sliding window" --no-rerank --show-text
-    python -m src.retriever   # interactive mode
-"""
-
 import google.generativeai as genai
 from pinecone import Pinecone
 from tenacity import retry, stop_after_attempt, wait_exponential

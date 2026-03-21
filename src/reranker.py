@@ -1,20 +1,3 @@
-"""
-reranker.py — rerank retrieved chunks using Jina AI reranker API
-
-Takes the top-K chunks from retriever.py, sends them to
-jina-reranker-v2-base-multilingual, and returns the top-N
-reranked by true relevance rather than vector similarity alone.
-
-Single public function:
-    rerank(query, chunks, top_n) -> list[dict]
-
-Each returned chunk is the original dict with one extra field added:
-    "rerank_score": 0.8821   # Jina relevance score (0–1)
-
-Run directly to test:
-    python -m src.reranker
-"""
-
 import os
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
