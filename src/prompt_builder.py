@@ -1,14 +1,16 @@
-import tiktoken
 from rich.console import Console
 
 from src.config import MAX_CONTEXT_TOKENS
 
 console = Console()
 
-_enc = tiktoken.get_encoding("cl100k_base")
 
 def _count_tokens(text: str) -> int:
-    return len(_enc.encode(text))
+    """
+    Approximate token count without tiktoken (no Rust compiler needed).
+    Rule of thumb: 1 token ≈ 4 characters for English/code text.
+    """
+    return len(text) // 4
 
 
 # ── System prompts ────────────────────────────────────────────

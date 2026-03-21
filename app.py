@@ -313,7 +313,7 @@ with st.sidebar:
 # ── Header ─────────────────────────────────────────────────────
 st.markdown("""
 <div class="dsa-header" style="text-align:center">
-    <p class="dsa-title" style="font-size:3.2rem;justify-content:center">DSA Hint Engine</p>
+    <p class="dsa-title" style="font-size:3.2rem;justify-content:center">Recurse</p>
     <p class="dsa-sub" style="font-size:1.05rem">Paste a problem + your stuck code → get a targeted hint, not the answer</p>
 </div>
 """, unsafe_allow_html=True)
@@ -325,14 +325,12 @@ col_left, col_right = st.columns([1, 1], gap="large")
 with col_left:
     problem = st.text_area(
         "Problem description",
-        placeholder="Given an array of integers and a target, return indices of two numbers that sum to target...",
         height=130,
     )
 
 with col_right:
     code = st.text_area(
         "Your current code (optional)",
-        placeholder="def two_sum(nums, target):\n    for i in range(len(nums)):\n        for j in range(i+1, len(nums)):\n            if nums[i] + nums[j] == target:\n                return [i, j]",
         height=130,
     )
 
