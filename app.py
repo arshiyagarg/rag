@@ -1,10 +1,3 @@
-"""
-app.py — DSA Hint Engine Streamlit UI
-
-Run:
-    streamlit run app.py
-"""
-
 import streamlit as st
 import html as html_lib
 from src.pipeline      import hint

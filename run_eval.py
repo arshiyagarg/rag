@@ -1,19 +1,3 @@
-"""
-run_eval.py — run 10 DSA golden questions through the hint pipeline
-
-Scoring per question (0–4 points):
-    +1  correct pattern identified (sliding window, BFS, DP, etc.)
-    +1  at least 3 expected concepts appear in the hint
-    +1  correct source type cited (SO or CP-Algorithms URL)
-    +1  hint does NOT reveal the full solution (no complete code given)
-
-Usage:
-    python run_eval.py
-    python run_eval.py --id q03
-    python run_eval.py --no-save
-    python run_eval.py --threshold 0.4
-"""
-
 import argparse
 import json
 import re

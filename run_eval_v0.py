@@ -1,18 +1,3 @@
-"""
-run_eval.py — run the 10 golden questions through the pipeline and score results
-
-Scoring per question (0–3 points):
-    +1  at least one expected_source_contains URL appears in sources
-    +1  at least 3 of the expected_concepts appear in the explanation
-    +1  explanation does NOT contain the "not covered" fallback phrase
-
-Usage:
-    python run_eval.py                  # run all 10 questions
-    python run_eval.py --id q03         # run a single question by id
-    python run_eval.py --no-save        # run without saving outputs to disk
-    python run_eval.py --threshold 0.5  # override retrieval threshold
-"""
-
 import argparse
 import json
 import time

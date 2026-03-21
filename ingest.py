@@ -1,26 +1,3 @@
-"""
-ingest.py — populate Pinecone with DSA Hint Engine data
-
-Sources:
-    stackoverflow   — top-voted DSA Q&A via Stack Exchange API
-    cp_algorithms   — DSA articles from CP-Algorithms via GitHub
-
-Fallback behaviour:
-    If all crawled chunks already exist in Pinecone, ingest.py
-    automatically fetches MORE data from the same source (deeper
-    crawl) and tries again — up to MAX_FALLBACK_ROUNDS times.
-
-Usage:
-    python ingest.py                           # ingest all sources
-    python ingest.py --source stackoverflow    # single source
-    python ingest.py --source cp_algorithms    # single source
-    python ingest.py --dry-run                 # crawl + chunk only, no embed
-    python ingest.py --from-step chunk         # skip crawl
-    python ingest.py --from-step embed         # skip crawl + chunk
-    python ingest.py --force                   # re-crawl even if files exist
-    python ingest.py --delete-index            # wipe Pinecone index first
-"""
-
 import argparse
 import sys
 import time
