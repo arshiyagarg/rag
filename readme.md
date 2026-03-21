@@ -51,10 +51,10 @@ Streamlit UI                  real-time streamed response + sources panel
 
 ## Data sources
 
-| Source | Content | Access |
-|---|---|---|
-| **Stack Overflow** | Top-voted DSA Q&A, accepted answers, vote scores | Stack Exchange API (free) |
-| **CP-Algorithms** | 87 DSA articles across 6 topic folders | GitHub raw API (CC-BY-SA) |
+| Source | Content |
+|---|---|
+| **Stack Overflow** | Top-voted DSA Q&A, accepted answers, vote scores | 
+| **CP-Algorithms** | 87 DSA articles across 6 topic folders | 
 
 ---
 
@@ -147,48 +147,9 @@ O(hint) identifies the specific bug and returns minimal corrected code in the sa
 
 ---
 
-## Project structure
-
-```
-ohint/
-├── app.py                  Streamlit UI
-├── ingest.py               Data pipeline runner
-├── run_eval.py             Eval suite (10 golden DSA questions)
-├── src/
-│   ├── config.py           All settings from .env
-│   ├── so_crawler.py       Stack Overflow ingestion
-│   ├── cp_crawler.py       CP-Algorithms ingestion
-│   ├── chunker.py          Multi-source semantic chunking
-│   ├── embedder.py         Gemini embed + Pinecone upsert
-│   ├── retriever.py        Pinecone query + Jina reranking
-│   ├── reranker.py         Jina AI reranker
-│   ├── prompt_builder.py   Hint / code-fix system prompts
-│   ├── generator.py        Groq generation + streaming
-│   └── pipeline.py         hint() end-to-end function
-├── eval/
-│   ├── golden.json         10 DSA golden questions
-│   └── outputs/            Eval run results
-└── data/                   Crawled + chunked data (git-ignored)
-```
-
----
-
 ## Evaluation
 
 ```bash
 python run_eval.py
 ```
-
-Scores each question 0–4 across: pattern identification, concept coverage, source citation, and no full solution revealed. Target: 7/10 pass.
-
-```bash
-python run_eval.py --id q05          # single question
-python run_eval.py --threshold 0.35  # tune retrieval
-```
-
 ---
-
-## Roadmap
-
-- **v1 (current)** — SO + CP-Algorithms, Streamlit UI, hint + code-fix modes
-- **v2** — Topic selector (not just DSA — any Python library), per-topic Pinecone namespaces, HyDE query expansion
